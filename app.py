@@ -8,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Clean CSS
+# CSS
 st.markdown(
     """
 <style>
