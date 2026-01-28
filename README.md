@@ -19,7 +19,7 @@ OrbitGuide to aplikacja wykorzystująca technologię **RAG (Retrieval Augmented 
 
 ---
 
-## 🏗️ Architektura
+## Architektura
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌───────────────┐
@@ -42,25 +42,25 @@ OrbitGuide to aplikacja wykorzystująca technologię **RAG (Retrieval Augmented 
 
 ---
 
-## 🧠 Logika Systemu
+## Logika Systemu
 
-### 🔍 Wskaźnik Pewności (Confidence Score)
+### Wskaźnik Pewności (Confidence Score)
 System ocenia pewność odpowiedzi na podstawie liczby unikalnych dokumentów źródłowych użytych do wygenerowania odpowiedzi:
 - **Wysoka (100%)**: 5 lub więcej unikalnych źródeł
 - **Średnia (60-80%)**: 3-4 źródła
 - **Niska (<60%)**: 1-2 źródła
 
-### 🗣️ Kontekst Rozmowy
+### Kontekst Rozmowy
 LLM pamięta historię czatu (ostatnie 3 wymiany wiadomości), co pozwala na dopytywanie o szczegóły (np. *"A jakie są tego koszty?"* po pytaniu o rejestrację).
 
-### 🛡️ Filtrowanie Domeny
+### Filtrowanie Domeny
 OrbitGuide posiada wbudowane mechanizmy:
 - **Small-talk detector**: Wykrywa powitania i luźne rozmowy, odpowiadając naturalnie bez przeszukiwania bazy.
 - **Out-of-domain guard**: Odmawia odpowiedzi na pytania niezwiązane z prawem kosmicznym.
 
 ---
 
-## 🛠️ Instalacja
+## Instalacja
 
 ### 1. Klonowanie repozytorium
 
@@ -97,7 +97,7 @@ Wymagane klucze:
 
 ---
 
-## 🚀 Uruchomienie
+## Uruchomienie
 
 ### 1. Indeksowanie dokumentów (jednorazowo)
 
@@ -117,7 +117,7 @@ Aplikacja będzie dostępna pod adresem: `http://localhost:8501`
 
 ---
 
-## 📊 Ewaluacja
+## Ewaluacja
 
 System zawiera moduł ewaluacji jakości odpowiedzi:
 
@@ -135,7 +135,7 @@ python -m src.eval
 
 ---
 
-## 📁 Struktura Projektu
+## Struktura Projektu
 
 ```
 OrbitGuide/
@@ -156,7 +156,7 @@ OrbitGuide/
 
 ---
 
-## 📚 Źródła Danych
+## Źródła Danych
 
 Dokumenty przeanalizowane przez system:
 
@@ -172,7 +172,7 @@ Dokumenty przeanalizowane przez system:
 
 ---
 
-## 🧰 Technologie
+## Technologie
 
 - **LangChain** - Orkiestracja RAG
 - **ChromaDB** - Baza wektorowa
@@ -182,12 +182,12 @@ Dokumenty przeanalizowane przez system:
 
 ---
 
-## 👥 Zespół Umiski
+## Zespół Umiski
 
 Projekt stworzony na hackathon **BITEhack 2026**.
 
 ---
 
-## 📄 Licencja
+## Licencja
 
 MIT License
