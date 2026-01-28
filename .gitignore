@@ -1,0 +1,32 @@
+# Zmienne środowiskowe
+.env
+.env.local
+
+# Baza wektorowa (generowana przez ingestion)
+data/chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/.env

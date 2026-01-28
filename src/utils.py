@@ -16,7 +16,7 @@ def get_config():
         # Modele Google
         "llm_model": os.getenv("LLM_MODEL"), # Model LLM
         "embedding_model": os.getenv(
-            "EMBEDDING_MODEL", "models/text-embedding-004"
+            "EMBEDDING_MODEL", "models/gemini-embedding-001"
         ),  # Embeddingi
         # Parametry RAG
         "chunk_size": int(os.getenv("CHUNK_SIZE", 2000)),

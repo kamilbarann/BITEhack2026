@@ -14,50 +14,29 @@ from src.utils import get_config
 _CACHED_CHAIN = None
 _VECTORSTORE = None
 use_groq = True  # False, aby używać modeli Google zamiast Groq
-cot_system_template = """
-Jesteś OrbitGuide – wirtualnym głównym inżynierem ds. zgodności (Chief Compliance Engineer).
-Twoim celem jest ochrona użytkownika przed błędami prawnymi w misjach kosmicznych poprzez analizę dostarczonego KONTEKSTU.
+cot_system_template = """Jesteś OrbitGuide - asystentem pomagającym firmom i startupom w zrozumieniu prawa kosmicznego.
 
-### KONTEKST ŹRÓDŁOWY:
+{chat_history}
+
+Dokumenty źródłowe:
 {context}
 
-### INSTRUKCJA MYŚLENIA (CHAIN OF THOUGHT):
-Zanim odpowiesz, przeprowadź wewnętrzną analizę w sekcji "ANALIZA DANYCH":
-1. Przeskanuj kontekst w poszukiwaniu konkretnych liczb, artykułów prawnych i wymagań technicznych.
-2. Jeśli kontekst jest sprzeczny lub niepełny, zidentyfikuj ryzyka.
-3. Jeśli pytanie jest poza kontekstem, przygotuj uprzejmą odmowę.
+Pytanie: {question}
 
-### INSTRUKCJA ODPOWIEDZI:
-Po zakończeniu analizy, napisz frazę "Odpowiedź:" i wygeneruj odpowiedź dla użytkownika w następującym formacie:
+Zasady odpowiedzi:
+- NIE PRZEDSTAWIAJ SIĘ - przejdź od razu do odpowiedzi
+- Pisz po polsku z poprawną gramatyką
+- Jeśli pytanie nawiązuje do poprzedniej rozmowy, wykorzystaj kontekst
+- Zakładaj, że użytkownik to przedstawiciel firmy planującej misję kosmiczną
+- Tłumacz język prawniczy na praktyczne wskazówki
+- Jeśli pytanie nie dotyczy prawa kosmicznego, powiedz krótko że specjalizujesz się tylko w tej dziedzinie
+- Jeśli to powitanie, odpowiedz krótko
+- Opieraj się tylko na dokumentach, nie zmyślaj
 
----
-**Werdykt / Krótka Odpowiedź:**
-(Jedno, konkretne zdanie podsumowujące. Np. "Tak, wymagana jest rejestracja w UNOOSA.")
+Odpowiedź:"""
 
-**Uzasadnienie Regulacyjne:**
-(Tutaj opisz szczegóły, powołując się na dokumenty. Używaj cytowań, np. [Outer Space Treaty, Art VI].)
-
-**Lista Kontrolna dla Inżyniera (Action Items):**
-(Wypunktuj co konkretnie użytkownik musi zrobić. Np.:
-- [ ] Złożyć wniosek do UKE/ITU (termin: 2 lata przed startem)
-- [ ] Przygotować plan deorbitacji (zgodnie z ISO 24113)
-)
----
-
-Pamiętaj:
-- Nie lanie wody. Konkrety.
-- Jeśli nie wiesz – napisz "Brak danych w dokumentacji", nie zmyślaj prawa.
-- Odpowiadaj w języku pytania.
-
-PYTANIE UŻYTKOWNIKA:
-{question}
-
-ANALIZA DANYCH:
-"""
-
-# Tworzymy obiekt PromptTemplate
 COT_PROMPT = PromptTemplate(
-    template=cot_system_template, input_variables=["context", "question"]
+    template=cot_system_template, input_variables=["context", "question", "chat_history"]
 )
 
 
@@ -90,7 +69,7 @@ def get_rag_chain():
 
     # Embeddingi takie same jak przy tworzeniu bazy
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         task_type="retrieval_query",
         google_api_key=config["google_api_key"],
     )
@@ -118,13 +97,25 @@ def get_rag_chain():
         )
 
     # --- FUNKCJA EKSPANSJI ZAPYTANIA ---
-    def get_expanded_context(query_dict):
+    def get_expanded_docs_and_context(query_dict):
+        """
+        Zwraca słownik z:
+        - 'context': połączony tekst dokumentów (dla LLM)
+        - 'docs': lista dokumentów z metadanymi (dla źródeł)
+        """
         question = query_dict["question"]
 
-        # Szybki prompt do generowania wariantów pytań
-        expansion_prompt = f"""Jesteś ekspertem search engine. Zwróć 2 alternatywne, techniczne warianty tego pytania, aby lepiej przeszukać dokumentację NASA/ESA.
-        Pytanie: {question}
-        Zwróć tylko warianty, każdy w nowej linii, bez numeracji."""
+        # Prompt do generowania wariantów pytań (PL + EN dla lepszego dopasowania do dokumentów)
+        expansion_prompt = f"""Jesteś ekspertem od wyszukiwania w dokumentacji prawnej NASA/ESA/UNOOSA.
+        
+Pytanie użytkownika: {question}
+
+Wygeneruj dokładnie 3 alternatywne warianty tego pytania:
+1. Wariant techniczny po polsku (używając terminologii prawniczej)
+2. Wariant po angielsku (dokumenty źródłowe są głównie w języku angielskim)
+3. Wariant po angielsku z kluczowymi terminami (space law, treaty, liability, registration, etc.)
+
+Zwróć TYLKO 3 warianty, każdy w nowej linii, bez numeracji ani dodatkowych wyjaśnień."""
 
         try:
             response = llm.invoke(expansion_prompt)
@@ -144,71 +135,139 @@ def get_rag_chain():
             docs = retriever.invoke(q)
             all_docs.extend(docs)
 
-        # Usuwanie duplikatów
+        # Usuwanie duplikatów (zachowując dokumenty z metadanymi)
         unique_contents = set()
         final_docs = []
         for doc in all_docs:
             if doc.page_content not in unique_contents:
                 unique_contents.add(doc.page_content)
                 final_docs.append(doc)
+        
+        # Ograniczenie do max 5 dokumentów aby nie przekroczyć limitu tokenów
+        final_docs = final_docs[:5]
 
-        return "\n\n".join(doc.page_content for doc in final_docs)
+        context_text = "\n\n".join(doc.page_content for doc in final_docs)
+        
+        return {
+            "context": context_text,
+            "docs": final_docs
+        }
 
     # --- GLÓWNY PIPELINE ---
-
-    _CACHED_CHAIN = RunnableParallel(
-        {
-            "context": lambda x: get_expanded_context(x),
-            "question": itemgetter("question"),
+    def run_chain(query_dict):
+        """Pipeline który zwraca odpowiedź LLM wraz z dokumentami źródłowymi."""
+        result = get_expanded_docs_and_context(query_dict)
+        context = result["context"]
+        docs = result["docs"]
+        
+        # Pobierz historię rozmowy (jeśli jest)
+        chat_history = query_dict.get("chat_history", "")
+        
+        # Generowanie odpowiedzi przez LLM
+        prompt_text = COT_PROMPT.format(
+            context=context, 
+            question=query_dict["question"],
+            chat_history=chat_history
+        )
+        response = llm.invoke(prompt_text)
+        answer = response.content if hasattr(response, "content") else str(response)
+        
+        return {
+            "answer": answer,
+            "context": context,
+            "docs": docs
         }
-    ).assign(answer=(COT_PROMPT | llm | StrOutputParser()))
 
+    _CACHED_CHAIN = run_chain
     return _CACHED_CHAIN
 
 
-def get_astro_answer(query_text):
-    def normalize_score(raw_score):
-        min_val = 0.1
-        max_val = 0.4
-
-        # Skalowanie do przedziału 0-1
-        scaled = (raw_score - min_val) / (max_val - min_val)
-        return max(0, min(100, int(scaled * 100)))
-
-    vectorstore = get_resources()  # zoptymalizowana baza
-
-    docs_and_scores = vectorstore.similarity_search_with_relevance_scores(
-        query_text,
-        k=5,  # Sprawdzamy top 3 fragmenty
-    )
-
-    if not docs_and_scores:
+def get_astro_answer(query_text, messages=None):
+    """
+    Główna funkcja do przetwarzania pytań użytkownika.
+    Zwraca odpowiedź, źródła i confidence - wszystko spójne z jednego wyszukiwania.
+    
+    Args:
+        query_text: Pytanie użytkownika
+        messages: Lista poprzednich wiadomości [{"role": "user/assistant", "content": "..."}]
+    """
+    # Formatowanie historii rozmowy (ostatnie 3 wymiany)
+    chat_history = ""
+    if messages and len(messages) > 0:
+        # Bierzemy ostatnie 6 wiadomości (3 wymiany user+assistant)
+        recent = messages[-6:]
+        history_lines = []
+        for m in recent:
+            role = "Użytkownik" if m["role"] == "user" else "Asystent"
+            # Skracamy długie odpowiedzi
+            content = m["content"][:200] + "..." if len(m["content"]) > 200 else m["content"]
+            history_lines.append(f"{role}: {content}")
+        if history_lines:
+            chat_history = "Historia rozmowy:\n" + "\n".join(history_lines)
+    
+    # Detekcja powitań i small-talk - nie potrzebujemy źródeł
+    greetings = [
+        "hej", "cześć", "siema", "witaj", "dzień dobry", "dobry wieczór",
+        "hello", "hi", "hey", "co słychać", "jak się masz", "co tam",
+        "co robisz", "jak leci", "co u ciebie", "siemka", "yo", "elo",
+        "witam", "dzięki", "dziękuję", "ok", "okej", "super", "fajnie"
+    ]
+    query_lower = query_text.lower().strip()
+    
+    is_greeting = any(query_lower.startswith(g) or query_lower == g for g in greetings)
+    
+    # Dodatkowa detekcja: bardzo krótkie pytania bez słów kluczowych to prawdopodobnie small-talk
+    space_keywords = ["satelit", "kosm", "orbi", "rakiet", "rejestr", "traktat", "unoosa", "esa", "nasa", "prawo"]
+    has_space_keyword = any(kw in query_lower for kw in space_keywords)
+    is_short_non_space = len(query_lower.split()) <= 3 and not has_space_keyword
+    
+    is_small_talk = is_greeting or is_short_non_space
+    
+    chain = get_rag_chain()
+    result = chain({"question": query_text, "chat_history": chat_history})
+    
+    # Jeśli to powitanie/small-talk - nie pokazuj źródeł
+    if is_small_talk:
+        return {
+            "answer": result["answer"],
+            "sources": [],
+            "confidence": 100,
+            "is_greeting": True,
+        }
+    
+    docs = result.get("docs", [])
+    
+    if not docs:
         return {
             "answer": "Brak danych w bazie dokumentacji.",
             "sources": [],
             "confidence": 0,
         }
 
-    scores = [max(0, int(normalize_score(score))) for _, score in docs_and_scores]
-    mission_confidence = sum(scores) / len(scores)
-
-
-    chain = get_rag_chain()
-    result = chain.invoke({"question": query_text})
-
+    # Obliczanie źródeł z metadanych dokumentów (te same dokumenty które LLM widział)
     detailed_sources = []
-    for doc, score in docs_and_scores:
+    for doc in docs:
         name = doc.metadata.get("source", "Nieznany plik")
         page = doc.metadata.get("page", 0) + 1
-        detailed_sources.append(
-            {"text": f"📄 {name} (str. {page})", "score": max(0, int(score * 100))}
-        )
+        # Usuwamy ścieżkę, zostawiamy tylko nazwę pliku
+        if "/" in name:
+            name = name.split("/")[-1]
+        detailed_sources.append({
+            "text": f"📄 {name} (str. {page})",
+            "score": 100  # Dokumenty już są przefiltrowane jako najbardziej trafne
+        })
+
+    # Confidence na podstawie liczby znalezionych dokumentów
+    # Więcej unikalnych dokumentów = większa pewność
+    unique_sources = len(set(d["text"] for d in detailed_sources))
+    confidence = min(100, unique_sources * 20)  # 5 unikalnych źródeł = 100%
 
     return {
         "answer": result["answer"],
         "sources": detailed_sources,
-        "confidence": mission_confidence,
+        "confidence": confidence,
     }
+
 
 
 def quick_chat():
